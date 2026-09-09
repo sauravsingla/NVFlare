@@ -105,6 +105,10 @@ jobs:
           PY
       - name: One-round CIFAR path sanity check
         working-directory: research/adaptive-hetero-aggregation
+        env:
+          OMP_NUM_THREADS: "1"
+          MKL_NUM_THREADS: "1"
+          OPENBLAS_NUM_THREADS: "1"
         run: |
           python cifar10_evaluation/run.py \
             --method fedavg \
@@ -118,7 +122,7 @@ jobs:
             --lr 0.01 \
             --validation_fraction 0.10 \
             --num_workers 0 \
-            --num_threads 2 \
+            --num_threads 4 \
             --workspace_root "${RUNNER_TEMP}/preflight-workspace" \
             --split_root "${RUNNER_TEMP}/preflight-splits" \
             --results_jsonl "${RUNNER_TEMP}/preflight.jsonl" \
@@ -131,6 +135,10 @@ jobs:
     needs: preflight
     runs-on: ubuntu-24.04
     timeout-minutes: 355
+    env:
+      OMP_NUM_THREADS: "1"
+      MKL_NUM_THREADS: "1"
+      OPENBLAS_NUM_THREADS: "1"
     strategy:
       fail-fast: false
       max-parallel: 20
@@ -172,8 +180,8 @@ jobs:
             --batch_size 64 \
             --lr 0.01 \
             --validation_fraction 0.10 \
-            --num_workers 2 \
-            --num_threads 2 \
+            --num_workers 0 \
+            --num_threads 4 \
             --workspace_root "${RUNNER_TEMP}/nvflare-workspace" \
             --split_root "${RUNNER_TEMP}/cifar-splits" \
             --results_jsonl "result.jsonl" \
