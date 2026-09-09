@@ -52,7 +52,7 @@ jobs:
           key: cifar10-python-v2-c58f30108f718f92721af3b95e74349a
       - name: Download and verify CIFAR-10 once
         if: steps.cifar-cache.outputs.cache-hit != 'true'
-        timeout-minutes: 8
+        timeout-minutes: 12
         shell: bash
         run: |
           set -euo pipefail
@@ -60,36 +60,39 @@ jobs:
           archive="${RUNNER_TEMP}/cifar-10-python.tar.gz"
           mkdir -p "${root}"
 
+          # The Toronto origin is currently heavily throttled. Prefer byte-identical
+          # mirrors, but always verify the canonical torchvision MD5 before use.
           urls=(
+            "https://data.brainchip.com/dataset-mirror/cifar10/cifar-10-python.tar.gz"
+            "https://zenodo.org/records/10089977/files/cifar-10-python.tar.gz?download=1"
             "https://www.cs.toronto.edu/~kriz/cifar-10-python.tar.gz"
-            "http://www.cs.toronto.edu/~kriz/cifar-10-python.tar.gz"
           )
 
           downloaded=false
           for url in "${urls[@]}"; do
             echo "Downloading CIFAR-10 from ${url}"
+            rm -f "${archive}"
             if curl --fail --location --show-error --silent \
               --connect-timeout 15 \
-              --max-time 180 \
-              --retry 2 \
-              --retry-delay 5 \
+              --max-time 240 \
+              --retry 1 \
+              --retry-delay 3 \
               --retry-all-errors \
               "${url}" \
               --output "${archive}"; then
-              downloaded=true
-              break
+              if echo "c58f30108f718f92721af3b95e74349a  ${archive}" | md5sum --check --status; then
+                downloaded=true
+                echo "CIFAR-10 archive checksum verified."
+                break
+              fi
+              echo "Checksum mismatch from ${url}; trying next source."
             fi
           done
 
           if [[ "${downloaded}" != "true" ]]; then
-            echo "::error::Unable to download CIFAR-10 within the bounded retry window."
+            echo "::error::Unable to download a checksum-valid CIFAR-10 archive from any configured source."
             exit 1
           fi
-
-          echo "c58f30108f718f92721af3b95e74349a  ${archive}" | md5sum --check --status || {
-            echo "::error::CIFAR-10 archive checksum mismatch."
-            exit 1
-          }
 
           tar -xzf "${archive}" -C "${root}"
 
