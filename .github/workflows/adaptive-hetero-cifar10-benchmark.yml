@@ -8,6 +8,10 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: adaptive-hetero-cifar10-benchmark-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   preflight:
     name: Preflight tests and data
@@ -45,14 +49,56 @@ jobs:
         uses: actions/cache@v4
         with:
           path: /tmp/cifar10
-          key: cifar10-python-v1
-      - name: Download CIFAR-10 once
+          key: cifar10-python-v2-c58f30108f718f92721af3b95e74349a
+      - name: Download and verify CIFAR-10 once
         if: steps.cifar-cache.outputs.cache-hit != 'true'
+        timeout-minutes: 8
+        shell: bash
         run: |
+          set -euo pipefail
+          root=/tmp/cifar10
+          archive="${RUNNER_TEMP}/cifar-10-python.tar.gz"
+          mkdir -p "${root}"
+
+          urls=(
+            "https://www.cs.toronto.edu/~kriz/cifar-10-python.tar.gz"
+            "http://www.cs.toronto.edu/~kriz/cifar-10-python.tar.gz"
+          )
+
+          downloaded=false
+          for url in "${urls[@]}"; do
+            echo "Downloading CIFAR-10 from ${url}"
+            if curl --fail --location --show-error --silent \
+              --connect-timeout 15 \
+              --max-time 180 \
+              --retry 2 \
+              --retry-delay 5 \
+              --retry-all-errors \
+              "${url}" \
+              --output "${archive}"; then
+              downloaded=true
+              break
+            fi
+          done
+
+          if [[ "${downloaded}" != "true" ]]; then
+            echo "::error::Unable to download CIFAR-10 within the bounded retry window."
+            exit 1
+          fi
+
+          echo "c58f30108f718f92721af3b95e74349a  ${archive}" | md5sum --check --status || {
+            echo "::error::CIFAR-10 archive checksum mismatch."
+            exit 1
+          }
+
+          tar -xzf "${archive}" -C "${root}"
+
           python - <<'PY'
           from torchvision.datasets import CIFAR10
-          CIFAR10('/tmp/cifar10', train=True, download=True)
-          CIFAR10('/tmp/cifar10', train=False, download=True)
+
+          train = CIFAR10('/tmp/cifar10', train=True, download=False)
+          test = CIFAR10('/tmp/cifar10', train=False, download=False)
+          print(f"Verified CIFAR-10 cache: train={len(train)} test={len(test)}")
           PY
       - name: One-round CIFAR path sanity check
         working-directory: research/adaptive-hetero-aggregation
@@ -107,7 +153,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: /tmp/cifar10
-          key: cifar10-python-v1
+          key: cifar10-python-v2-c58f30108f718f92721af3b95e74349a
           fail-on-cache-miss: true
       - name: Run matched CIFAR-10 condition
         working-directory: research/adaptive-hetero-aggregation
