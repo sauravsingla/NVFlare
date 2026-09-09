@@ -112,7 +112,7 @@ jobs:
             --num_rounds 1 \
             --aggregation_epochs 1 \
             --batch_size 64 \
-            --lr 0.05 \
+            --lr 0.01 \
             --validation_fraction 0.10 \
             --num_workers 0 \
             --num_threads 2 \
@@ -167,7 +167,7 @@ jobs:
             --num_rounds 50 \
             --aggregation_epochs 4 \
             --batch_size 64 \
-            --lr 0.05 \
+            --lr 0.01 \
             --validation_fraction 0.10 \
             --num_workers 2 \
             --num_threads 2 \
