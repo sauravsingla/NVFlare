@@ -1,0 +1,195 @@
+name: adaptive-hetero-cifar10-benchmark
+
+on:
+  push:
+    branches:
+      - benchmark/adaptive-hetero-cifar10-5273
+
+permissions:
+  contents: read
+
+jobs:
+  preflight:
+    name: Preflight tests and data
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+          cache: pip
+      - name: Install CPU PyTorch and project dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install --index-url https://download.pytorch.org/whl/cpu torch torchvision
+          python -m pip install -e .
+          python -m pip install -r research/adaptive-hetero-aggregation/requirements.txt
+      - name: Run focused research tests
+        working-directory: research/adaptive-hetero-aggregation
+        env:
+          PYTHONPATH: src
+        run: python -m pytest -q tests
+      - name: Run end-to-end FedOpt SimEnv smoke
+        working-directory: research/adaptive-hetero-aggregation
+        run: |
+          python nvflare_smoke/job.py \
+            --n_clients 3 \
+            --num_rounds 5 \
+            --train_samples 180 \
+            --valid_samples 90 \
+            --local_epochs 1
+      - name: Restore CIFAR-10 cache
+        id: cifar-cache
+        uses: actions/cache@v4
+        with:
+          path: /tmp/cifar10
+          key: cifar10-python-v1
+      - name: Download CIFAR-10 once
+        if: steps.cifar-cache.outputs.cache-hit != 'true'
+        run: |
+          python - <<'PY'
+          from torchvision.datasets import CIFAR10
+          CIFAR10('/tmp/cifar10', train=True, download=True)
+          CIFAR10('/tmp/cifar10', train=False, download=True)
+          PY
+      - name: One-round CIFAR path sanity check
+        working-directory: research/adaptive-hetero-aggregation
+        run: |
+          python cifar10_evaluation/run.py \
+            --method fedavg \
+            --alpha 0.1 \
+            --seed 7 \
+            --participation_rate 1.0 \
+            --n_clients 8 \
+            --num_rounds 1 \
+            --aggregation_epochs 1 \
+            --batch_size 64 \
+            --lr 0.05 \
+            --validation_fraction 0.10 \
+            --num_workers 0 \
+            --num_threads 2 \
+            --workspace_root "${RUNNER_TEMP}/preflight-workspace" \
+            --split_root "${RUNNER_TEMP}/preflight-splits" \
+            --results_jsonl "${RUNNER_TEMP}/preflight.jsonl" \
+            --eval_batch_size 256 \
+            --eval_num_workers 0 \
+            --eval_device cpu
+
+  benchmark:
+    name: ${{ matrix.method }} a=${{ matrix.alpha }} p=${{ matrix.participation }} s=${{ matrix.seed }}
+    needs: preflight
+    runs-on: ubuntu-24.04
+    timeout-minutes: 355
+    strategy:
+      fail-fast: false
+      max-parallel: 20
+      matrix:
+        method: [fedavg, fedprox, scaffold, fedce, adaptive]
+        alpha: [0.1, 0.5]
+        participation: [1.0, 0.75]
+        seed: [7, 19, 31, 43, 57]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+          cache: pip
+      - name: Install CPU PyTorch and project dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install --index-url https://download.pytorch.org/whl/cpu torch torchvision
+          python -m pip install -e .
+          python -m pip install -r research/adaptive-hetero-aggregation/requirements.txt
+      - name: Restore CIFAR-10 cache
+        uses: actions/cache@v4
+        with:
+          path: /tmp/cifar10
+          key: cifar10-python-v1
+          fail-on-cache-miss: true
+      - name: Run matched CIFAR-10 condition
+        working-directory: research/adaptive-hetero-aggregation
+        run: |
+          python cifar10_evaluation/run.py \
+            --method "${{ matrix.method }}" \
+            --alpha "${{ matrix.alpha }}" \
+            --seed "${{ matrix.seed }}" \
+            --participation_rate "${{ matrix.participation }}" \
+            --n_clients 8 \
+            --num_rounds 50 \
+            --aggregation_epochs 4 \
+            --batch_size 64 \
+            --lr 0.05 \
+            --validation_fraction 0.10 \
+            --num_workers 2 \
+            --num_threads 2 \
+            --workspace_root "${RUNNER_TEMP}/nvflare-workspace" \
+            --split_root "${RUNNER_TEMP}/cifar-splits" \
+            --results_jsonl "result.jsonl" \
+            --eval_batch_size 256 \
+            --eval_num_workers 0 \
+            --eval_device cpu
+      - name: Upload result row
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: result-${{ matrix.method }}-a${{ matrix.alpha }}-p${{ matrix.participation }}-s${{ matrix.seed }}
+          path: research/adaptive-hetero-aggregation/result.jsonl
+          if-no-files-found: error
+          retention-days: 14
+
+  summarize:
+    name: Validate complete matrix and summarize
+    needs: benchmark
+    if: always()
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+          cache: pip
+      - name: Install summary dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install numpy scipy
+      - name: Download completed result rows
+        uses: actions/download-artifact@v4
+        with:
+          pattern: result-*
+          path: gathered-results
+          merge-multiple: true
+      - name: Build validated reviewer-facing result tables
+        working-directory: research/adaptive-hetero-aggregation
+        run: |
+          mkdir -p results
+          find "${GITHUB_WORKSPACE}/gathered-results" -type f -name '*.jsonl' -print0 \
+            | sort -z \
+            | xargs -0 cat > results/cifar10_runs.jsonl
+          cd cifar10_evaluation
+          python summarize_results.py \
+            --input ../results/cifar10_runs.jsonl \
+            --output ../results/cifar10_summary.json \
+            --markdown_output ../results/cifar10_main_results.md \
+            --reference_method adaptive \
+            --protocol_version cifar10_dirichlet_trainval_test_v3 \
+            --require_complete \
+            --methods fedavg fedprox scaffold fedce adaptive \
+            --alphas 0.1 0.5 \
+            --participation_rates 1.0 0.75 \
+            --seeds 7 19 31 43 57
+      - name: Upload complete evidence package
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: cifar10-main-evidence
+          path: |
+            research/adaptive-hetero-aggregation/results/cifar10_runs.jsonl
+            research/adaptive-hetero-aggregation/results/cifar10_summary.json
+            research/adaptive-hetero-aggregation/results/cifar10_main_results.md
+          if-no-files-found: error
+          retention-days: 30
