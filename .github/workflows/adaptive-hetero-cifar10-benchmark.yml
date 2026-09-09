@@ -29,7 +29,7 @@ jobs:
       - name: Run focused research tests
         working-directory: research/adaptive-hetero-aggregation
         env:
-          PYTHONPATH: src
+          PYTHONPATH: ${{ github.workspace }}/research/adaptive-hetero-aggregation/src:${{ github.workspace }}/examples/advanced/cifar10/pt/src:${{ github.workspace }}/research/adaptive-hetero-aggregation/cifar10_evaluation
         run: python -m pytest -q tests
       - name: Run end-to-end FedOpt SimEnv smoke
         working-directory: research/adaptive-hetero-aggregation
