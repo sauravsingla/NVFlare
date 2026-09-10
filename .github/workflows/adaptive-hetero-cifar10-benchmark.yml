@@ -134,7 +134,7 @@ jobs:
     name: ${{ matrix.method }} a=${{ matrix.alpha }} p=${{ matrix.participation }} s=${{ matrix.seed }}
     needs: preflight
     runs-on: ubuntu-24.04
-    timeout-minutes: 355
+    timeout-minutes: 720
     env:
       OMP_NUM_THREADS: "1"
       MKL_NUM_THREADS: "1"
